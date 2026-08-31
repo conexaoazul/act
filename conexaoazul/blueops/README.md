@@ -34,8 +34,10 @@ run:
 
 ```bash
 cd act
-./conexaoazul/blueops/run-blue-runtime.sh ../BlueApps19
+bash ./conexaoazul/blueops/run-blue-runtime.sh ../BlueApps19
 ```
+
+Using `bash` keeps the command independent from the repository file executable bit.
 
 The wrapper executes this workflow from the BlueApps19 checkout:
 
@@ -57,7 +59,7 @@ GitHub Actions `startup_failure` is also not converted into a local PASS. Local 
 ACT_BIN=/path/to/act \
 BLUEAPPS_DIR=/path/to/BlueApps19 \
 BLUE_RUNTIME_WORKFLOW=.github/workflows/blue-runtime-local-preflight.yml \
-./conexaoazul/blueops/run-blue-runtime.sh
+bash ./conexaoazul/blueops/run-blue-runtime.sh
 ```
 
 Additional arguments after the BlueApps19 path are forwarded to `act`.
