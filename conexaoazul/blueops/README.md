@@ -5,8 +5,8 @@ This directory keeps Conexao Azul-specific integration additive and isolated fro
 ## Responsibility split
 
 - `conexaoazul/act`: local GitHub Actions execution engine.
-- `conexaoazul/BlueApps19`: Odoo/Blue Runtime contracts, profiles, locks, validators and workflows.
-- The wrapper in this directory does not duplicate Odoo business rules.
+- `conexaoazul/BlueApps19`: Odoo/Blue Runtime and Blue MCP contracts, validators and workflows.
+- wrappers in this directory do not duplicate Odoo business rules or permissions.
 
 ## Build the fork
 
@@ -14,15 +14,9 @@ This directory keeps Conexao Azul-specific integration additive and isolated fro
 make build
 ```
 
-The local binary is expected at:
+The local binary is expected at `dist/local/act`.
 
-```text
-dist/local/act
-```
-
-## Run the Blue Runtime preflight
-
-With the repositories checked out side by side:
+## Recommended workspace
 
 ```text
 workspace/
@@ -30,36 +24,57 @@ workspace/
 └── BlueApps19/
 ```
 
-run:
+## Blue Runtime preflight
 
 ```bash
 cd act
 bash ./conexaoazul/blueops/run-blue-runtime.sh ../BlueApps19
 ```
 
-Using `bash` keeps the command independent from the repository file executable bit.
+Executes `.github/workflows/blue-runtime-local-preflight.yml` from the exact BlueApps19 checkout and produces runtime resolution/OABOM evidence when that workflow exists in the selected branch.
 
-The wrapper executes this workflow from the BlueApps19 checkout:
+## Blue MCP Platform preflight
 
-```text
-.github/workflows/blue-runtime-local-preflight.yml
+```bash
+cd act
+bash ./conexaoazul/blueops/run-blue-mcp-platform.sh ../BlueApps19
 ```
 
-It resolves the exact BlueApps19 HEAD, runs the semantic validator and unit tests, produces the runtime resolution, Odoo Addon BOM (OABOM) and normalized QA input, and writes evidence only.
+Executes `.github/workflows/blue-mcp-platform-local-preflight.yml` from the exact BlueApps19 checkout. The MCP preflight validates the fail-closed policy contract, compiles the changed Python surface and parses manifests/XML. It does not perform Odoo writes or call MCP endpoints.
+
+The current Blue MCP R2 lane covers:
+
+- `blue_mcp_server` core governance hardening;
+- optional `blue_mcp_automation` bridge for Scheduled Actions, Server Actions and Automated Actions;
+- optional `blue_mcp_bitconn_webhook` bridge;
+- privileged automation switch/group policy;
+- removal of the obsolete `base.user_admin` XML reference;
+- sales/App Store positioning and menu organization.
 
 ## Safety contract
 
-This integration must remain evidence-only. A successful local preflight does **not** authorize merge, deploy, production changes, external messages, entitlement changes, or financial actions.
+These integrations are evidence-only. A successful local preflight does **not** authorize merge, deploy, production changes, external messages, entitlement changes, financial actions or privileged MCP mutations.
 
-GitHub Actions `startup_failure` is also not converted into a local PASS. Local execution is independent evidence tied to the exact local SHA.
+GitHub Actions `startup_failure` is never converted into a local hosted-CI PASS. Local `act` execution is independent evidence tied to the exact local SHA.
 
 ## Overrides
+
+Runtime:
 
 ```bash
 ACT_BIN=/path/to/act \
 BLUEAPPS_DIR=/path/to/BlueApps19 \
 BLUE_RUNTIME_WORKFLOW=.github/workflows/blue-runtime-local-preflight.yml \
 bash ./conexaoazul/blueops/run-blue-runtime.sh
+```
+
+MCP:
+
+```bash
+ACT_BIN=/path/to/act \
+BLUEAPPS_DIR=/path/to/BlueApps19 \
+BLUE_MCP_WORKFLOW=.github/workflows/blue-mcp-platform-local-preflight.yml \
+bash ./conexaoazul/blueops/run-blue-mcp-platform.sh
 ```
 
 Additional arguments after the BlueApps19 path are forwarded to `act`.
