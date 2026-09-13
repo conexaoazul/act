@@ -28,6 +28,7 @@ if [[ $# -ge 4 ]]; then shift 4; else shift 3; fi
 
 ACT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ACT_BIN="${ACT_BIN:-$ACT_ROOT/dist/blue-act}"
+PLATFORM_IMAGE="${ACT_PLATFORM_IMAGE:-catthehacker/ubuntu:act-latest}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -40,6 +41,7 @@ git clone --depth 1 --branch "$REF" "$REPO_URL" "$TMP/repo"
 
 exec "$ACT_BIN" \
   --directory "$TMP/repo" \
+  --platform "ubuntu-latest=$PLATFORM_IMAGE" \
   --workflows "$TMP/repo/$WORKFLOW" \
   "$EVENT" \
   "$@"
