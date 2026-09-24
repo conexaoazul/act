@@ -12,10 +12,15 @@ permissions:
   contents: read
 
 jobs:
-  gate:
+  static-gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate BlueOps scripts
+        run: |
+          bash -n scripts/odoo-blueops.sh
+          bash -n scripts/phd-deploy.sh
+          bash -n scripts/phd-healthcheck.sh
       - name: Validate image namespace
         env:
           IMAGE: ${{ inputs.image }}
@@ -24,11 +29,11 @@ jobs:
             ghcr.io/conexaoazul/odoo-demo-phd:*) ;;
             *) echo "Imagem fora do namespace permitido"; exit 2 ;;
           esac
-      - name: Show guarded production command
+      - name: Operational commands
         env:
           IMAGE: ${{ inputs.image }}
         run: |
-          echo "Static gate OK."
-          echo "Execute no azul2:"
-          echo "docker pull $IMAGE"
-          echo "Depois siga docs/blueops/PHD_DEPLOY_RUNBOOK.md"
+          echo "No azul2:"
+          echo "phd-deploy --image $IMAGE"
+          echo "Após GATE_OK:"
+          echo "phd-deploy --image $IMAGE --apply"
