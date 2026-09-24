@@ -93,7 +93,7 @@ check_current() {
 
   local stable=0 sample
   for sample in 1 2 3; do
-    recovery="$(docker exec "$CID" python3 - "$DB" <<'PY'
+    recovery="$(docker exec -i "$CID" python3 - "$DB" <<'PY'
 import os,pathlib,psycopg2,sys
 db=sys.argv[1]
 pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
@@ -117,7 +117,7 @@ PY
   [[ "$stable" == "3" ]] || fail "PostgreSQL sem estabilidade (último estado=$recovery)"
   ok "PostgreSQL estável: 3/3 amostras fora de recovery"
 
-  transient="$(docker exec "$CID" python3 - "$DB" <<'PY'
+  transient="$(docker exec -i "$CID" python3 - "$DB" <<'PY'
 import os,pathlib,psycopg2,sys
 db=sys.argv[1]
 pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
