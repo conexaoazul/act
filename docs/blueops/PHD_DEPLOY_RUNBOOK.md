@@ -1,60 +1,70 @@
-# PHD deploy runbook
+# PHD — desenvolvimento, gate e deploy
 
-Servidor de execucao: `azul2`.
+Servidor operacional: `azul2`.
 
-## Referencias
+## Referências atuais
 
-- Codigo Odoo: `conexaoazul/BlueApps19:19.0-mod`
-- PR de reconciliacao PHD: `conexaoazul/BlueApps19#701`
-- Merge: `17864dc511d8a35156dca9f66f4fe640065e721d`
+- Código canônico: `conexaoazul/BlueApps19`, branch `19.0-mod`
+- Reconciliação PHD: PR `conexaoazul/BlueApps19#701`
+- Merge PHD: `17864dc511d8a35156dca9f66f4fe640065e721d`
 - Imagem validada: `ghcr.io/conexaoazul/odoo-demo-phd:19-bestof-4bf6965`
-- Digest: `sha256:f97a97ac05756d61b79dc475ccf2788ed2ce75463e1cc55836c21ad53efa03b9`
 - Service: `odoo-demo-phd-transporte`
 - Banco: `phd_demo`
+- Tooling: `conexaoazul/act` → `scripts/odoo-blueops.sh`
+- Preset: `config/odoo/phd.env`
 
-## Acesso
-
-Use o usuario Linux `natan.nunes` no `azul2`, preferencialmente pela rede privada/Tailscale.
-O usuario ja pertence ao grupo `docker`, suficiente para operar o Swarm sem sudo.
-
-## Check rapido
+## Operação diária
 
 ```bash
-docker service ls --filter name=odoo-demo-phd-transporte
-docker service ps odoo-demo-phd-transporte --no-trunc | head
-curl -fsSL -o /dev/null https://phd-demo.conexaoazul.com
-docker service logs --since 30m --tail 500 odoo-demo-phd-transporte 2>&1 \
-  | grep -Ei 'CRITICAL|Traceback|recovery mode|not installable|incompatible version'
+phd-healthcheck
 ```
 
-## Rollout da imagem
+Gate completo sem tocar produção:
 
 ```bash
-IMAGE=ghcr.io/conexaoazul/odoo-demo-phd:<tag>
-docker pull "$IMAGE"
-docker service update --image "$IMAGE" \
-  --update-order start-first \
-  --update-parallelism 1 \
-  --update-failure-action rollback \
-  --update-monitor 20s \
-  --detach=false odoo-demo-phd-transporte
+phd-deploy --image ghcr.io/conexaoazul/odoo-demo-phd:<tag>
 ```
 
-## Gate obrigatorio
+Promoção após gate:
 
-Antes do banco real, faca clone descartavel de `phd_demo` e rode os mesmos `-u/-i` da release.
-So promova quando os 7 modulos terminarem em `installed`.
+```bash
+phd-deploy --image ghcr.io/conexaoazul/odoo-demo-phd:<tag> --apply
+```
 
-Upgrade:
-`blue_custom_contracts,blue_custom_contracts_dynamic,blue_custom_hr_employee,blue_hr_employee_medical,blue_phd_documents`
+Não usar o botão Atualizar da UI para releases coordenadas. Em 24/09/2026 um upgrade iniciado pela UI coincidiu com recovery do PostgreSQL e deixou módulos presos em `to upgrade`.
 
-Install:
-`blue_whatsapp_custom_contracts,blue_whatsapp_custom_contracts_dynamic`
+## O que o gate garante
 
-## Guardrails
+- lock exclusivo do ambiente;
+- service/container saudáveis;
+- PostgreSQL estável em 3 amostras;
+- nenhum módulo em estado transitório;
+- HTTP 200 + TLS válido;
+- snapshot único e validado;
+- clone descartável do banco;
+- upgrade/install no clone;
+- todos os módulos esperados em `installed`.
 
-- Sempre backup `pg_dump -Fc` antes do upgrade real.
-- Nunca fazer restore automatico apos falha de upgrade; exigir decisao humana.
-- Tratar PostgreSQL em `recovery mode` como bloqueio.
-- O healthcheck deve verificar filestore: ha referencias historicas a anexos sem arquivo fisico.
-- O repositorio `conexaoazul/act` e publico; nao instalar runner self-hosted de producao nele sem isolamento e ACL dedicados.
+## Fluxo para novas funcionalidades
+
+1. Branch no `BlueApps19/19.0-mod`.
+2. Implementar módulo/migração/integração.
+3. Rodar validações e abrir PR.
+4. Merge apenas com revisão/gates.
+5. Gerar imagem imutável do PHD.
+6. Rodar `phd-deploy --image <tag>`.
+7. Se `GATE_OK`, rodar novamente com `--apply`.
+8. Testar fluxo funcional no PHD e observar logs.
+
+## Equipe
+
+Usuários com acesso Docker no `azul2` podem usar o mesmo tool.
+O acesso ao GHCR deve ser individual e com escopo mínimo `read:packages`.
+
+## Backups
+
+Backups novos do BlueOps ficam em:
+
+`/var/lib/blueops/backups/phd`
+
+O diretório é compartilhado pelo grupo `docker` e o restore continua sujeito a decisão humana.
