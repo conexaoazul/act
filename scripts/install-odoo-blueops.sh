@@ -21,6 +21,11 @@ for cfg in "$ROOT"/config/odoo/*.env; do
   name="$(basename "$cfg")"
   [[ "$name" == "example.env" ]] && continue
   install -m 0644 "$cfg" "$DEST_ETC/$name"
+  env_name="${name%.env}"
+  lock="$STATE_ROOT/locks/blueops-odoo-${env_name}.lock"
+  touch "$lock"
+  chown root:docker "$lock"
+  chmod 0664 "$lock"
 done
 
 echo "BlueOps instalado."
