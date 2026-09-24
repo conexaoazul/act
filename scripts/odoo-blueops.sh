@@ -51,6 +51,9 @@ UPDATE_MONITOR="${UPDATE_MONITOR:-20s}"
 UPGRADE_MODULES="${UPGRADE_MODULES:-}"
 INSTALL_MODULES="${INSTALL_MODULES:-}"
 RUNTIME_SSH="${RUNTIME_SSH:-}"
+PRECREATE_EXTENSIONS="${PRECREATE_EXTENSIONS:-}"
+DB_ADMIN_SERVICE="${DB_ADMIN_SERVICE:-}"
+DB_ADMIN_USER="${DB_ADMIN_USER:-}"
 
 if [[ "$CMD" != "check" ]]; then
   [[ -n "$IMAGE" ]] || { echo "Falta --image" >&2; exit 2; }
@@ -271,6 +274,20 @@ c.close()
 PY
 }
 
+prepare_clone_extensions() {
+  [[ -n "$PRECREATE_EXTENSIONS" ]] || return 0
+  [[ -n "$DB_ADMIN_SERVICE" && -n "$DB_ADMIN_USER" ]] || fail "PRECREATE_EXTENSIONS exige DB_ADMIN_SERVICE e DB_ADMIN_USER"
+  local admin_cid ext
+  admin_cid="$(docker ps --filter "label=com.docker.swarm.service.name=$DB_ADMIN_SERVICE" -q | head -1)"
+  [[ -n "$admin_cid" ]] || fail "container admin PostgreSQL não encontrado: $DB_ADMIN_SERVICE"
+  IFS=',' read -ra exts <<<"$PRECREATE_EXTENSIONS"
+  for ext in "${exts[@]}"; do
+    [[ "$ext" =~ ^[A-Za-z0-9_]+$ ]] || fail "nome de extensão inválido: $ext"
+    docker exec "$admin_cid" psql -U "$DB_ADMIN_USER" -d "$CLONE" -v ON_ERROR_STOP=1 -q -c "CREATE EXTENSION IF NOT EXISTS \"$ext\""
+    ok "extensão preparada no clone: $ext"
+  done
+}
+
 gate_clone() {
   CLONE="gate_${DB}_$(date +%Y%m%d%H%M%S)"
   say "== CLONE GATE: $CLONE =="
@@ -285,8 +302,9 @@ q.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(os.enviro
 c.close()
 PY
   trap cleanup_clone EXIT
+  prepare_clone_extensions
   runtime_docker exec -i "$CID" pg_restore --no-owner --no-acl -f - <"$SNAPSHOT" \
-    | sed '/transaction_timeout/d' \
+    | sed '/transaction_timeout/d;/^CREATE EXTENSION /d;/^COMMENT ON EXTENSION /d' \
     | runtime_docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" sh -lc 'PW=$(cat "$PASSWORD_FILE"); export PGPASSWORD="$PW"; exec psql -h "$HOST" -p "${PORT:-5432}" -U "$USER" -d "$BLUEOPS_CLONE" -v ON_ERROR_STOP=1 -q'
 
   GATE_LOG="$(mktemp)"
