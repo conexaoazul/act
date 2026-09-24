@@ -72,3 +72,43 @@ Evite atualizar módulos pela UI em produção. A UI não oferece o mesmo snapsh
 - Para imagens GHCR novas, cada operador deve usar credencial dedicada somente `read:packages`.
 - Não copiar token administrativo de outro usuário.
 - Restore de backup continua sendo decisão humana; o tool não faz restore automático após migração parcial.
+
+
+## Instalação / bootstrap
+
+Em um host Swarm novo:
+
+```bash
+sudo scripts/install-odoo-blueops.sh
+```
+
+Isso instala:
+- `/usr/local/bin/odoo-blueops`;
+- aliases PHD;
+- `/etc/blueops/odoo/phd.env`;
+- diretórios compartilhados em `/var/lib/blueops`.
+
+Para um novo cliente, copie `config/odoo/example.env`, ajuste os campos declarativos e instale o preset em `/etc/blueops/odoo/<ambiente>.env`.
+
+## CI local do PHD
+
+Validação estática canônica:
+
+```bash
+scripts/phd-ci.sh 19.0-mod
+```
+
+ou pelo preset:
+
+```bash
+scripts/blue-ci-presets.sh phd-suite
+```
+
+O preset usa `conexaoazul/BlueApps19:19.0-mod`, roda o gate PHD/WhatsApp e valida os sete módulos do pacote.
+
+## Segredos
+
+O gate/upgrade efêmero não coloca mais a senha PostgreSQL em argumentos de processo.
+O BlueOps gera um `odoo.conf` temporário com permissão `0600`, monta-o read-only no container efêmero e o remove ao final da execução.
+
+Isso evita exposição da senha em `ps`/linha de comando durante gate e deploy.

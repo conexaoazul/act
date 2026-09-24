@@ -82,6 +82,34 @@ db_ctx() {
   DBPASS="$(docker exec "$CID" sh -lc 'cat "$PASSWORD_FILE"')"
 }
 
+make_odoo_conf() {
+  ODOO_CONF="$(mktemp)"
+  chmod 600 "$ODOO_CONF"
+  cat >"$ODOO_CONF" <<EOF
+[options]
+db_host = $DBHOST
+db_port = $DBPORT
+db_user = $DBUSER
+db_password = $DBPASS
+addons_path = $ADDONS_PATH
+EOF
+}
+
+run_odoo_ephemeral() {
+  local db="$1" log="$2"
+  shift 2
+  make_odoo_conf
+  docker run --rm --user 0:0 \
+    --mount "type=bind,src=$ODOO_CONF,dst=/run/blueops-odoo.conf,readonly" \
+    --entrypoint odoo "$IMAGE" \
+    -c /run/blueops-odoo.conf -d "$db" "$@" \
+    --stop-after-init --no-http --log-level=warn >"$log" 2>&1
+  local rc=$?
+  rm -f "$ODOO_CONF"
+  ODOO_CONF=""
+  return "$rc"
+}
+
 ensure_image() {
   if docker image inspect "$IMAGE" >/dev/null 2>&1; then
     ok "imagem já disponível localmente"
@@ -183,27 +211,56 @@ snapshot() {
   ok "snapshot válido: $SNAPSHOT"
 }
 
+cleanup_clone() {
+  [[ -n "${CLONE:-}" && -n "${CID:-}" ]] || return 0
+  docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" python3 - <<'PY' >/dev/null 2>&1 || true
+import os,pathlib,psycopg2
+from psycopg2 import sql
+pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
+c=psycopg2.connect(host=os.environ["HOST"],port=os.environ.get("PORT","5432"),user=os.environ["USER"],password=pw,dbname="postgres")
+c.autocommit=True
+q=c.cursor()
+q.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(os.environ["BLUEOPS_CLONE"])))
+c.close()
+PY
+}
+
 gate_clone() {
   CLONE="gate_${DB}_$(date +%Y%m%d%H%M%S)"
   say "== CLONE GATE: $CLONE =="
-  docker exec -e PGPASSWORD="$DBPASS" "$CID" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -v ON_ERROR_STOP=1 -q -c "CREATE DATABASE \"$CLONE\" OWNER \"$DBUSER\""
-  trap 'docker exec -e PGPASSWORD="$DBPASS" "$CID" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -q -c "DROP DATABASE IF EXISTS \"$CLONE\" WITH (FORCE)" >/dev/null 2>&1 || true' EXIT
+  docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" python3 - <<'PY'
+import os,pathlib,psycopg2
+from psycopg2 import sql
+pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
+c=psycopg2.connect(host=os.environ["HOST"],port=os.environ.get("PORT","5432"),user=os.environ["USER"],password=pw,dbname="postgres")
+c.autocommit=True
+q=c.cursor()
+q.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(os.environ["BLUEOPS_CLONE"]),sql.Identifier(os.environ["USER"])))
+c.close()
+PY
+  trap cleanup_clone EXIT
   docker exec -i "$CID" pg_restore --no-owner --no-acl -f - <"$SNAPSHOT" \
     | sed '/transaction_timeout/d' \
-    | docker exec -i -e PGPASSWORD="$DBPASS" "$CID" psql \
-        -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$CLONE" -v ON_ERROR_STOP=1 -q
+    | docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" sh -lc 'PW=$(cat "$PASSWORD_FILE"); export PGPASSWORD="$PW"; exec psql -h "$HOST" -p "${PORT:-5432}" -U "$USER" -d "$BLUEOPS_CLONE" -v ON_ERROR_STOP=1 -q'
 
   GATE_LOG="$(mktemp)"
-  args=(--rm --entrypoint odoo "$IMAGE" -d "$CLONE")
+  args=()
   [[ -n "$UPGRADE_MODULES" ]] && args+=(-u "$UPGRADE_MODULES")
   [[ -n "$INSTALL_MODULES" ]] && args+=(-i "$INSTALL_MODULES")
-  args+=(--db_host "$DBHOST" --db_port "$DBPORT" --db_user "$DBUSER" --db_password "$DBPASS" --addons-path "$ADDONS_PATH" --stop-after-init --no-http --log-level=warn)
-  docker run "${args[@]}" >"$GATE_LOG" 2>&1 || { tail -120 "$GATE_LOG" >&2; fail "gate Odoo falhou"; }
+  run_odoo_ephemeral "$CLONE" "$GATE_LOG" "${args[@]}" || { tail -120 "$GATE_LOG" >&2; fail "gate Odoo falhou"; }
   grep -Eq 'CRITICAL|Traceback|Failed to initialize|incompatible version|not installable|ParseError' "$GATE_LOG" && { tail -120 "$GATE_LOG" >&2; fail "gate Odoo encontrou erro crítico"; }
 
-  EXPECTED_SQL="$(printf "'%s'," ${EXPECTED_MODULES//,/ })"; EXPECTED_SQL="${EXPECTED_SQL%,}"
   total_expected="$(awk -F',' '{print NF}' <<<"$EXPECTED_MODULES")"
-  installed="$(docker exec -e PGPASSWORD="$DBPASS" "$CID" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$CLONE" -t -A -c "select count(*) from ir_module_module where name in ($EXPECTED_SQL) and state='installed'")"
+  installed="$(docker exec -i -e BLUEOPS_CLONE="$CLONE" -e BLUEOPS_EXPECTED="$EXPECTED_MODULES" "$CID" python3 - <<'PY'
+import os,pathlib,psycopg2
+pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
+names=[x for x in os.environ["BLUEOPS_EXPECTED"].split(",") if x]
+c=psycopg2.connect(host=os.environ["HOST"],port=os.environ.get("PORT","5432"),user=os.environ["USER"],password=pw,dbname=os.environ["BLUEOPS_CLONE"])
+q=c.cursor()
+q.execute("select count(*) from ir_module_module where name = any(%s) and state='installed'",(names,))
+print(q.fetchone()[0]); c.close()
+PY
+)"
   [[ "$installed" == "$total_expected" ]] || fail "gate: $installed/$total_expected módulos installed"
   ok "gate: $installed/$total_expected módulos installed"
 }
@@ -215,11 +272,10 @@ rollout_and_upgrade() {
 
   say "== PROD UPGRADE =="
   PROD_LOG="$(mktemp)"
-  args=(--rm --entrypoint odoo "$IMAGE" -d "$DB")
+  args=()
   [[ -n "$UPGRADE_MODULES" ]] && args+=(-u "$UPGRADE_MODULES")
   [[ -n "$INSTALL_MODULES" ]] && args+=(-i "$INSTALL_MODULES")
-  args+=(--db_host "$DBHOST" --db_port "$DBPORT" --db_user "$DBUSER" --db_password "$DBPASS" --addons-path "$ADDONS_PATH" --stop-after-init --no-http --log-level=warn)
-  docker run "${args[@]}" >"$PROD_LOG" 2>&1 || { tail -160 "$PROD_LOG" >&2; fail "upgrade real falhou; snapshot=$SNAPSHOT"; }
+  run_odoo_ephemeral "$DB" "$PROD_LOG" "${args[@]}" || { tail -160 "$PROD_LOG" >&2; fail "upgrade real falhou; snapshot=$SNAPSHOT"; }
   grep -Eq 'CRITICAL|Traceback|Failed to initialize|incompatible version|not installable|ParseError' "$PROD_LOG" && { tail -160 "$PROD_LOG" >&2; fail "upgrade real com erro crítico; snapshot=$SNAPSHOT"; }
 
   say "== REGISTRY REFRESH =="
