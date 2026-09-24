@@ -85,6 +85,9 @@ discover_envs() {
     if (( include_all == 0 )) && [[ "$running" == "0" ]]; then
       continue
     fi
+    if [[ "$svc" =~ mcp|(^|[-_])pg([-_]|$)|documentation ]] || [[ "$image" =~ mcp|postgres|pgvector ]]; then
+      continue
+    fi
     if [[ "$svc" =~ (^|[-_])(odoo|gremio|digimano|phd|saas|portal)([-_]|$) ]] || [[ "$image" =~ (^|/|:)odoo([:/@-]|$) ]] || [[ "$image" =~ /odoo- ]]; then
       printf '%-34s %-8s %s\n' "$svc" "$replicas" "$image"
     fi
