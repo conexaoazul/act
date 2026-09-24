@@ -21,9 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "$PRESET" in
   phd-suite)
-    REPO_URL="https://github.com/ConexaoAzulDigital/blue_hr_suite_odoo.git"
-    REF="19.0"
-    WORKFLOW=".act/workflows/blue-phd-suite.yml"
+    exec "$SCRIPT_DIR/phd-ci.sh" "${BLUE_CI_REF:-19.0-mod}"
     ;;
   blue-smart-pricing)
     REPO_URL="https://github.com/ConexaoAzulDigital/BlueApps19.git"
