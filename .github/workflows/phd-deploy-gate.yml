@@ -1,0 +1,34 @@
+name: PHD deploy gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Imagem GHCR candidata do PHD"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate image namespace
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          case "$IMAGE" in
+            ghcr.io/conexaoazul/odoo-demo-phd:*) ;;
+            *) echo "Imagem fora do namespace permitido"; exit 2 ;;
+          esac
+      - name: Show guarded production command
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          echo "Static gate OK."
+          echo "Execute no azul2:"
+          echo "docker pull $IMAGE"
+          echo "Depois siga docs/blueops/PHD_DEPLOY_RUNBOOK.md"
