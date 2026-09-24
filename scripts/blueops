@@ -38,6 +38,8 @@ validate_cfg() {
     : "${BLUEOPS_LABEL:?}"
     : "${SERVICE:?}"
     : "${RUNTIME_NODE:?}"
+    : "${DEPLOY_ENABLED:?}"
+    [[ "$DEPLOY_ENABLED" == "0" || "$DEPLOY_ENABLED" == "1" ]] || { echo "DEPLOY_ENABLED deve ser 0 ou 1"; exit 3; }
     : "${DB:?}"
     : "${URL:?}"
     : "${IMAGE_PREFIX:?}"
@@ -102,8 +104,8 @@ show_env() {
   # shellcheck disable=SC1090
   (
     source "$cfg"
-    printf 'ENV=%s\nLABEL=%s\nSERVICE=%s\nRUNTIME_NODE=%s\nDB=%s\nURL=%s\nIMAGE_PREFIX=%s\nBACKUP_ROOT=%s\n' \
-      "$BLUEOPS_ENV" "$BLUEOPS_LABEL" "$SERVICE" "$RUNTIME_NODE" "$DB" "$URL" "$IMAGE_PREFIX" "$BACKUP_ROOT"
+    printf 'ENV=%s\nLABEL=%s\nSERVICE=%s\nRUNTIME_NODE=%s\nDEPLOY_ENABLED=%s\nDB=%s\nURL=%s\nIMAGE_PREFIX=%s\nBACKUP_ROOT=%s\n' \
+      "$BLUEOPS_ENV" "$BLUEOPS_LABEL" "$SERVICE" "$RUNTIME_NODE" "$DEPLOY_ENABLED" "$DB" "$URL" "$IMAGE_PREFIX" "$BACKUP_ROOT"
     printf 'UPGRADE_MODULES=%s\nINSTALL_MODULES=%s\nEXPECTED_MODULES=%s\n' \
       "${UPGRADE_MODULES:-}" "${INSTALL_MODULES:-}" "$EXPECTED_MODULES"
   )
