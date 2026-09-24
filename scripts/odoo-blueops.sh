@@ -163,7 +163,7 @@ snapshot() {
     fail "pg_dump falhou"
   done
   test -s "$SNAPSHOT" || fail "snapshot vazio"
-  pg_restore -l "$SNAPSHOT" >/dev/null || fail "snapshot inválido"
+  docker exec -i "$CID" pg_restore -l <"$SNAPSHOT" >/dev/null || fail "snapshot inválido"
   sha256sum "$SNAPSHOT" >"$SNAPSHOT.sha256"
   docker service inspect "$SERVICE" >"$SPEC"
   ok "snapshot válido: $SNAPSHOT"
