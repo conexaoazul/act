@@ -188,7 +188,8 @@ gate_clone() {
   say "== CLONE GATE: $CLONE =="
   docker exec -e PGPASSWORD="$DBPASS" "$CID" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -v ON_ERROR_STOP=1 -q -c "CREATE DATABASE \"$CLONE\" OWNER \"$DBUSER\""
   trap 'docker exec -e PGPASSWORD="$DBPASS" "$CID" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -q -c "DROP DATABASE IF EXISTS \"$CLONE\" WITH (FORCE)" >/dev/null 2>&1 || true' EXIT
-  docker run --rm -i postgres:16-alpine pg_restore --no-owner --no-acl --clean --if-exists     -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$CLONE" <"$SNAPSHOT" >/dev/null 2>&1 ||     PGPASSWORD="$DBPASS" pg_restore --no-owner --no-acl -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$CLONE" "$SNAPSHOT" >/dev/null
+  docker exec -i -e PGPASSWORD="$DBPASS" "$CID" pg_restore --no-owner --no-acl \
+    -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$CLONE" <"$SNAPSHOT" >/dev/null
 
   GATE_LOG="$(mktemp)"
   args=(--rm --entrypoint odoo "$IMAGE" -d "$CLONE")
