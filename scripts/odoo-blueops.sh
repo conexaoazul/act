@@ -82,6 +82,34 @@ db_ctx() {
   DBPASS="$(docker exec "$CID" sh -lc 'cat "$PASSWORD_FILE"')"
 }
 
+make_odoo_conf() {
+  ODOO_CONF="$(mktemp)"
+  chmod 600 "$ODOO_CONF"
+  cat >"$ODOO_CONF" <<EOF
+[options]
+db_host = $DBHOST
+db_port = $DBPORT
+db_user = $DBUSER
+db_password = $DBPASS
+addons_path = $ADDONS_PATH
+EOF
+}
+
+run_odoo_ephemeral() {
+  local db="$1" log="$2"
+  shift 2
+  make_odoo_conf
+  docker run --rm --user 0:0 \
+    --mount "type=bind,src=$ODOO_CONF,dst=/run/blueops-odoo.conf,readonly" \
+    --entrypoint odoo "$IMAGE" \
+    -c /run/blueops-odoo.conf -d "$db" "$@" \
+    --stop-after-init --no-http --log-level=warn >"$log" 2>&1
+  local rc=$?
+  rm -f "$ODOO_CONF"
+  ODOO_CONF=""
+  return "$rc"
+}
+
 ensure_image() {
   if docker image inspect "$IMAGE" >/dev/null 2>&1; then
     ok "imagem já disponível localmente"
@@ -194,11 +222,10 @@ gate_clone() {
         -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$CLONE" -v ON_ERROR_STOP=1 -q
 
   GATE_LOG="$(mktemp)"
-  args=(--rm --entrypoint odoo "$IMAGE" -d "$CLONE")
+  args=()
   [[ -n "$UPGRADE_MODULES" ]] && args+=(-u "$UPGRADE_MODULES")
   [[ -n "$INSTALL_MODULES" ]] && args+=(-i "$INSTALL_MODULES")
-  args+=(--db_host "$DBHOST" --db_port "$DBPORT" --db_user "$DBUSER" --db_password "$DBPASS" --addons-path "$ADDONS_PATH" --stop-after-init --no-http --log-level=warn)
-  docker run "${args[@]}" >"$GATE_LOG" 2>&1 || { tail -120 "$GATE_LOG" >&2; fail "gate Odoo falhou"; }
+  run_odoo_ephemeral "$CLONE" "$GATE_LOG" "${args[@]}" || { tail -120 "$GATE_LOG" >&2; fail "gate Odoo falhou"; }
   grep -Eq 'CRITICAL|Traceback|Failed to initialize|incompatible version|not installable|ParseError' "$GATE_LOG" && { tail -120 "$GATE_LOG" >&2; fail "gate Odoo encontrou erro crítico"; }
 
   EXPECTED_SQL="$(printf "'%s'," ${EXPECTED_MODULES//,/ })"; EXPECTED_SQL="${EXPECTED_SQL%,}"
@@ -215,11 +242,10 @@ rollout_and_upgrade() {
 
   say "== PROD UPGRADE =="
   PROD_LOG="$(mktemp)"
-  args=(--rm --entrypoint odoo "$IMAGE" -d "$DB")
+  args=()
   [[ -n "$UPGRADE_MODULES" ]] && args+=(-u "$UPGRADE_MODULES")
   [[ -n "$INSTALL_MODULES" ]] && args+=(-i "$INSTALL_MODULES")
-  args+=(--db_host "$DBHOST" --db_port "$DBPORT" --db_user "$DBUSER" --db_password "$DBPASS" --addons-path "$ADDONS_PATH" --stop-after-init --no-http --log-level=warn)
-  docker run "${args[@]}" >"$PROD_LOG" 2>&1 || { tail -160 "$PROD_LOG" >&2; fail "upgrade real falhou; snapshot=$SNAPSHOT"; }
+  run_odoo_ephemeral "$DB" "$PROD_LOG" "${args[@]}" || { tail -160 "$PROD_LOG" >&2; fail "upgrade real falhou; snapshot=$SNAPSHOT"; }
   grep -Eq 'CRITICAL|Traceback|Failed to initialize|incompatible version|not installable|ParseError' "$PROD_LOG" && { tail -160 "$PROD_LOG" >&2; fail "upgrade real com erro crítico; snapshot=$SNAPSHOT"; }
 
   say "== REGISTRY REFRESH =="
