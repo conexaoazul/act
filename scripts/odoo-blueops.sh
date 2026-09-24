@@ -211,15 +211,37 @@ snapshot() {
   ok "snapshot válido: $SNAPSHOT"
 }
 
+cleanup_clone() {
+  [[ -n "${CLONE:-}" && -n "${CID:-}" ]] || return 0
+  docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" python3 - <<'PY' >/dev/null 2>&1 || true
+import os,pathlib,psycopg2
+from psycopg2 import sql
+pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
+c=psycopg2.connect(host=os.environ["HOST"],port=os.environ.get("PORT","5432"),user=os.environ["USER"],password=pw,dbname="postgres")
+c.autocommit=True
+q=c.cursor()
+q.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(os.environ["BLUEOPS_CLONE"])))
+c.close()
+PY
+}
+
 gate_clone() {
   CLONE="gate_${DB}_$(date +%Y%m%d%H%M%S)"
   say "== CLONE GATE: $CLONE =="
-  docker exec -e PGPASSWORD="$DBPASS" "$CID" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -v ON_ERROR_STOP=1 -q -c "CREATE DATABASE \"$CLONE\" OWNER \"$DBUSER\""
-  trap 'docker exec -e PGPASSWORD="$DBPASS" "$CID" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d postgres -q -c "DROP DATABASE IF EXISTS \"$CLONE\" WITH (FORCE)" >/dev/null 2>&1 || true' EXIT
+  docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" python3 - <<'PY'
+import os,pathlib,psycopg2
+from psycopg2 import sql
+pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
+c=psycopg2.connect(host=os.environ["HOST"],port=os.environ.get("PORT","5432"),user=os.environ["USER"],password=pw,dbname="postgres")
+c.autocommit=True
+q=c.cursor()
+q.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(os.environ["BLUEOPS_CLONE"]),sql.Identifier(os.environ["USER"])))
+c.close()
+PY
+  trap cleanup_clone EXIT
   docker exec -i "$CID" pg_restore --no-owner --no-acl -f - <"$SNAPSHOT" \
     | sed '/transaction_timeout/d' \
-    | docker exec -i -e PGPASSWORD="$DBPASS" "$CID" psql \
-        -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$CLONE" -v ON_ERROR_STOP=1 -q
+    | docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" sh -lc 'PW=$(cat "$PASSWORD_FILE"); export PGPASSWORD="$PW"; exec psql -h "$HOST" -p "${PORT:-5432}" -U "$USER" -d "$BLUEOPS_CLONE" -v ON_ERROR_STOP=1 -q'
 
   GATE_LOG="$(mktemp)"
   args=()
@@ -228,9 +250,17 @@ gate_clone() {
   run_odoo_ephemeral "$CLONE" "$GATE_LOG" "${args[@]}" || { tail -120 "$GATE_LOG" >&2; fail "gate Odoo falhou"; }
   grep -Eq 'CRITICAL|Traceback|Failed to initialize|incompatible version|not installable|ParseError' "$GATE_LOG" && { tail -120 "$GATE_LOG" >&2; fail "gate Odoo encontrou erro crítico"; }
 
-  EXPECTED_SQL="$(printf "'%s'," ${EXPECTED_MODULES//,/ })"; EXPECTED_SQL="${EXPECTED_SQL%,}"
   total_expected="$(awk -F',' '{print NF}' <<<"$EXPECTED_MODULES")"
-  installed="$(docker exec -e PGPASSWORD="$DBPASS" "$CID" psql -h "$DBHOST" -p "$DBPORT" -U "$DBUSER" -d "$CLONE" -t -A -c "select count(*) from ir_module_module where name in ($EXPECTED_SQL) and state='installed'")"
+  installed="$(docker exec -i -e BLUEOPS_CLONE="$CLONE" -e BLUEOPS_EXPECTED="$EXPECTED_MODULES" "$CID" python3 - <<'PY'
+import os,pathlib,psycopg2
+pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
+names=[x for x in os.environ["BLUEOPS_EXPECTED"].split(",") if x]
+c=psycopg2.connect(host=os.environ["HOST"],port=os.environ.get("PORT","5432"),user=os.environ["USER"],password=pw,dbname=os.environ["BLUEOPS_CLONE"])
+q=c.cursor()
+q.execute("select count(*) from ir_module_module where name = any(%s) and state='installed'",(names,))
+print(q.fetchone()[0]); c.close()
+PY
+)"
   [[ "$installed" == "$total_expected" ]] || fail "gate: $installed/$total_expected módulos installed"
   ok "gate: $installed/$total_expected módulos installed"
 }
