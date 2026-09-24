@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_ROOT="${BLUEOPS_CONFIG_ROOT:-/etc/blueops/odoo}"
+CORE="${BLUEOPS_ODOO_CORE:-/usr/local/bin/odoo-blueops}"
+
+usage() {
+  cat <<'EOF'
+Uso:
+  blueops env list
+  blueops env show <ambiente>
+  blueops env validate <ambiente>
+  blueops odoo <ambiente> check
+  blueops odoo <ambiente> gate --image <imagem>
+  blueops odoo <ambiente> deploy --image <imagem>
+
+Exemplos:
+  blueops odoo phd check
+  blueops odoo phd gate --image ghcr.io/conexaoazul/odoo-demo-phd:<tag>
+  blueops odoo phd deploy --image ghcr.io/conexaoazul/odoo-demo-phd:<tag>
+EOF
+}
+
+cfg_path() {
+  printf '%s/%s.env\n' "$CONFIG_ROOT" "$1"
+}
+
+validate_cfg() {
+  local env="$1" cfg
+  cfg="$(cfg_path "$env")"
+  [[ -r "$cfg" ]] || { echo "Ambiente '$env' não encontrado em $CONFIG_ROOT" >&2; return 2; }
+  bash -n "$cfg"
+  # shellcheck disable=SC1090
+  (
+    source "$cfg"
+    : "${BLUEOPS_ENV:?}"
+    : "${BLUEOPS_LABEL:?}"
+    : "${SERVICE:?}"
+    : "${DB:?}"
+    : "${URL:?}"
+    : "${IMAGE_PREFIX:?}"
+    : "${ADDONS_PATH:?}"
+    : "${EXPECTED_MODULES:?}"
+    : "${BACKUP_ROOT:?}"
+    [[ "$BLUEOPS_ENV" == "$env" ]] || { echo "BLUEOPS_ENV=$BLUEOPS_ENV difere do nome '$env'" >&2; exit 3; }
+    [[ "$URL" == https://* ]] || { echo "URL deve usar https://"; exit 3; }
+    [[ "$BACKUP_ROOT" == /var/lib/blueops/backups/* ]] || { echo "BACKUP_ROOT fora do padrão /var/lib/blueops/backups/*"; exit 3; }
+  )
+}
+
+list_envs() {
+  shopt -s nullglob
+  local f env
+  for f in "$CONFIG_ROOT"/*.env; do
+    env="$(basename "$f" .env)"
+    [[ "$env" == "example" ]] && continue
+    # shellcheck disable=SC1090
+    (
+      source "$f"
+      printf '%-16s %-28s %-30s %s\n' "$env" "${BLUEOPS_LABEL:-?}" "${SERVICE:-?}" "${URL:-?}"
+    )
+  done
+}
+
+show_env() {
+  local env="$1" cfg
+  cfg="$(cfg_path "$env")"
+  validate_cfg "$env" >/dev/null
+  # shellcheck disable=SC1090
+  (
+    source "$cfg"
+    printf 'ENV=%s\nLABEL=%s\nSERVICE=%s\nDB=%s\nURL=%s\nIMAGE_PREFIX=%s\nBACKUP_ROOT=%s\n' \
+      "$BLUEOPS_ENV" "$BLUEOPS_LABEL" "$SERVICE" "$DB" "$URL" "$IMAGE_PREFIX" "$BACKUP_ROOT"
+    printf 'UPGRADE_MODULES=%s\nINSTALL_MODULES=%s\nEXPECTED_MODULES=%s\n' \
+      "${UPGRADE_MODULES:-}" "${INSTALL_MODULES:-}" "$EXPECTED_MODULES"
+  )
+}
+
+[[ $# -ge 1 ]] || { usage; exit 2; }
+
+case "$1" in
+  env)
+    shift
+    case "${1:-}" in
+      list) list_envs ;;
+      show) [[ $# -eq 2 ]] || { usage; exit 2; }; show_env "$2" ;;
+      validate) [[ $# -eq 2 ]] || { usage; exit 2; }; validate_cfg "$2"; echo "ENV_OK $2" ;;
+      *) usage; exit 2 ;;
+    esac
+    ;;
+  odoo)
+    [[ $# -ge 3 ]] || { usage; exit 2; }
+    env="$2"; shift 2
+    validate_cfg "$env"
+    exec "$CORE" --config "$(cfg_path "$env")" "$@"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

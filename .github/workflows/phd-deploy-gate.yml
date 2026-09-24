@@ -24,6 +24,9 @@ jobs:
           bash -n scripts/install-odoo-blueops.sh
           bash -n scripts/phd-ci.sh
           bash -n scripts/blue-ci-presets.sh
+          bash -n scripts/blueops
+          bash -n scripts/validate-blueops-catalog.sh
+          scripts/validate-blueops-catalog.sh config/odoo
       - name: Validate image namespace
         env:
           IMAGE: ${{ inputs.image }}

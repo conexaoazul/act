@@ -112,3 +112,30 @@ O gate/upgrade efêmero não coloca mais a senha PostgreSQL em argumentos de pro
 O BlueOps gera um `odoo.conf` temporário com permissão `0600`, monta-o read-only no container efêmero e o remove ao final da execução.
 
 Isso evita exposição da senha em `ps`/linha de comando durante gate e deploy.
+
+
+## Catálogo de ambientes
+
+A camada de ergonomia fica no comando `blueops`.
+
+```bash
+blueops env list
+blueops env show phd
+blueops env validate phd
+blueops odoo phd check
+blueops odoo phd gate --image ghcr.io/conexaoazul/odoo-demo-phd:<tag>
+blueops odoo phd deploy --image ghcr.io/conexaoazul/odoo-demo-phd:<tag>
+```
+
+O nome do ambiente resolve automaticamente para `/etc/blueops/odoo/<ambiente>.env`.
+Assim, o operador não precisa memorizar banco, service, URL, diretório de backup ou caminho do preset.
+
+O arquivo `config/odoo/example.env` é somente template e não aparece em `blueops env list`.
+
+Antes de mergear novos presets:
+
+```bash
+scripts/validate-blueops-catalog.sh config/odoo
+```
+
+O validador exige nome coerente, HTTPS e diretório de backup dentro de `/var/lib/blueops/backups`.
