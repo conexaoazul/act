@@ -91,18 +91,31 @@ check_current() {
   [[ "$health" == "healthy" || "$health" == "running" ]] || fail "container=$health"
   ok "container $health"
 
-  recovery="$(docker exec "$CID" python3 - "$DB" <<'PY'
+  local stable=0 sample
+  for sample in 1 2 3; do
+    recovery="$(docker exec "$CID" python3 - "$DB" <<'PY'
 import os,pathlib,psycopg2,sys
 db=sys.argv[1]
 pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
-c=psycopg2.connect(host=os.environ["HOST"],port=os.environ.get("PORT","5432"),user=os.environ["USER"],password=pw,dbname=db,connect_timeout=5)
-q=c.cursor(); q.execute("select pg_is_in_recovery()")
-print("t" if q.fetchone()[0] else "f")
-c.close()
+try:
+    c=psycopg2.connect(host=os.environ["HOST"],port=os.environ.get("PORT","5432"),user=os.environ["USER"],password=pw,dbname=db,connect_timeout=5)
+    q=c.cursor(); q.execute("select pg_is_in_recovery()")
+    print("t" if q.fetchone()[0] else "f")
+    c.close()
+except Exception:
+    print("error")
 PY
 )"
-  [[ "$recovery" == "f" ]] || fail "PostgreSQL em recovery"
-  ok "PostgreSQL fora de recovery"
+    if [[ "$recovery" == "f" ]]; then
+      stable=$((stable+1))
+    else
+      stable=0
+    fi
+    [[ "$stable" == "3" ]] && break
+    sleep 2
+  done
+  [[ "$stable" == "3" ]] || fail "PostgreSQL sem estabilidade (último estado=$recovery)"
+  ok "PostgreSQL estável: 3/3 amostras fora de recovery"
 
   transient="$(docker exec "$CID" python3 - "$DB" <<'PY'
 import os,pathlib,psycopg2,sys
