@@ -82,6 +82,18 @@ db_ctx() {
   DBPASS="$(docker exec "$CID" sh -lc 'cat "$PASSWORD_FILE"')"
 }
 
+ensure_image() {
+  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    ok "imagem já disponível localmente"
+    return 0
+  fi
+  if docker pull "$IMAGE" >/dev/null 2>&1; then
+    ok "imagem baixada do registry"
+    return 0
+  fi
+  fail "imagem não disponível localmente e pull falhou; autenticação GHCR read:packages necessária"
+}
+
 check_current() {
   local replicas health http code tls elapsed transient recovery recent
   replicas="$(docker service ls --filter "name=$SERVICE" --format '{{.Replicas}}' | head -1)"
@@ -219,7 +231,7 @@ case "$CMD" in
     ;;
   gate)
     check_current
-    docker pull "$IMAGE" >/dev/null
+    ensure_image
     db_ctx
     snapshot
     gate_clone
@@ -227,7 +239,7 @@ case "$CMD" in
     ;;
   deploy)
     check_current
-    docker pull "$IMAGE" >/dev/null
+    ensure_image
     db_ctx
     snapshot
     gate_clone
