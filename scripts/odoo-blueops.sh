@@ -65,6 +65,8 @@ fi
 LOCK_ROOT="${LOCK_ROOT:-/var/lib/blueops/locks}"
 mkdir -p "$LOCK_ROOT"
 LOCK="$LOCK_ROOT/blueops-odoo-${BLUEOPS_ENV}.lock"
+touch "$LOCK"
+chmod 0664 "$LOCK" 2>/dev/null || true
 exec 9>"$LOCK"
 if ! flock -n 9; then
   echo "Outro deploy/check exclusivo de ${BLUEOPS_ENV} já está em execução." >&2
