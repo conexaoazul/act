@@ -139,3 +139,36 @@ scripts/validate-blueops-catalog.sh config/odoo
 ```
 
 O validador exige nome coerente, HTTPS e diretório de backup dentro de `/var/lib/blueops/backups`.
+
+
+## Runtime distribuído
+
+Ambientes podem declarar:
+
+```bash
+RUNTIME_NODE=blueops-oci-worker-2
+RUNTIME_SSH=ociw2wg
+```
+
+O manager continua responsável por `docker service ps/logs/update`.
+Operações locais do container (`docker ps/exec/run`, snapshot e gate) são encaminhadas ao worker via SSH/WireGuard.
+
+O BlueOps valida que:
+- a task Swarm realmente está em `RUNTIME_NODE`;
+- o alias SSH resolve para o mesmo hostname;
+- nenhum `docker exec` ocorre no nó errado.
+
+Não promover workers a manager apenas para executar BlueOps.
+
+## Ambientes check-only
+
+Novos presets devem começar com:
+
+```bash
+DEPLOY_ENABLED=0
+```
+
+Nesse estado, `check` funciona, mas `gate` e `deploy` retornam bloqueio explícito.
+Somente após validar imagem, addons, snapshot, clone e dependências o ambiente deve passar para `DEPLOY_ENABLED=1`.
+
+O Digimano foi cadastrado inicialmente como check-only porque o banco referencia módulos que não estão disponíveis no baseline atual da imagem efêmera. Isso precisa ser corrigido antes de liberar promoção automatizada.

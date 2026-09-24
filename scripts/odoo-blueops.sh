@@ -50,8 +50,14 @@ LOG_WINDOW="${LOG_WINDOW:-5m}"
 UPDATE_MONITOR="${UPDATE_MONITOR:-20s}"
 UPGRADE_MODULES="${UPGRADE_MODULES:-}"
 INSTALL_MODULES="${INSTALL_MODULES:-}"
+RUNTIME_SSH="${RUNTIME_SSH:-}"
+PRECREATE_EXTENSIONS="${PRECREATE_EXTENSIONS:-}"
+DB_ADMIN_SERVICE="${DB_ADMIN_SERVICE:-}"
+DB_ADMIN_USER="${DB_ADMIN_USER:-}"
+DEPLOY_ENABLED="${DEPLOY_ENABLED:-1}"
 
 if [[ "$CMD" != "check" ]]; then
+  [[ "$DEPLOY_ENABLED" == "1" ]] || { echo "Gate/deploy desabilitado para $BLUEOPS_ENV pelo catálogo." >&2; exit 12; }
   [[ -n "$IMAGE" ]] || { echo "Falta --image" >&2; exit 2; }
   [[ "$IMAGE" == "$IMAGE_PREFIX"* ]] || { echo "Imagem fora do prefixo permitido: $IMAGE_PREFIX" >&2; exit 2; }
 fi
@@ -73,29 +79,48 @@ service_runtime_node() {
   docker service ps "$SERVICE" --filter desired-state=running --format '{{.Node}}' | head -1
 }
 
-assert_local_runtime() {
-  local runtime_node local_node
-  runtime_node="$(service_runtime_node)"
-  local_node="$(hostname)"
-  [[ -n "$runtime_node" ]] || fail "não foi possível determinar o nó runtime do service"
-  if [[ "$runtime_node" != "$local_node" ]]; then
-    fail "service $SERVICE roda em $runtime_node; execute o BlueOps nesse nó (nó atual: $local_node)"
+runtime_docker() {
+  if [[ -n "$RUNTIME_SSH" ]]; then
+    local cmd
+    printf -v cmd '%q ' docker "$@"
+    ssh -o BatchMode=yes "$RUNTIME_SSH" "$cmd"
+  else
+    docker "$@"
   fi
-  ok "runtime local no nó $local_node"
+}
+
+runtime_host() {
+  if [[ -n "$RUNTIME_SSH" ]]; then
+    ssh -o BatchMode=yes "$RUNTIME_SSH" hostname
+  else
+    hostname
+  fi
+}
+
+assert_runtime_transport() {
+  local runtime_node actual_host
+  runtime_node="$(service_runtime_node)"
+  [[ -n "$runtime_node" ]] || fail "não foi possível determinar o nó runtime do service"
+  if [[ -n "${RUNTIME_NODE:-}" && "$runtime_node" != "$RUNTIME_NODE" ]]; then
+    fail "service $SERVICE roda em $runtime_node, mas catálogo espera $RUNTIME_NODE"
+  fi
+  actual_host="$(runtime_host 2>/dev/null || true)"
+  [[ "$actual_host" == "$runtime_node" ]] || fail "transporte runtime inválido: esperado=$runtime_node obtido=${actual_host:-indisponível}"
+  ok "runtime $runtime_node via ${RUNTIME_SSH:-local}"
 }
 
 cid() {
-  assert_local_runtime >/dev/null
-  docker ps --filter "label=com.docker.swarm.service.name=$SERVICE" -q | head -1
+  assert_runtime_transport >/dev/null
+  runtime_docker ps --filter "label=com.docker.swarm.service.name=$SERVICE" -q | head -1
 }
 
 db_ctx() {
   CID="$(cid)"
-  [[ -n "$CID" ]] || fail "container local do service não encontrado"
-  DBHOST="$(docker exec "$CID" sh -lc 'printf %s "$HOST"')"
-  DBPORT="$(docker exec "$CID" sh -lc 'printf %s "${PORT:-5432}"')"
-  DBUSER="$(docker exec "$CID" sh -lc 'printf %s "$USER"')"
-  DBPASS="$(docker exec "$CID" sh -lc 'cat "$PASSWORD_FILE"')"
+  [[ -n "$CID" ]] || fail "container runtime do service não encontrado"
+  DBHOST="$(runtime_docker exec "$CID" sh -lc 'printf %s "$HOST"')"
+  DBPORT="$(runtime_docker exec "$CID" sh -lc 'printf %s "${PORT:-5432}"')"
+  DBUSER="$(runtime_docker exec "$CID" sh -lc 'printf %s "$USER"')"
+  DBPASS="$(runtime_docker exec "$CID" sh -lc 'cat "$PASSWORD_FILE"')"
 }
 
 make_odoo_conf() {
@@ -115,23 +140,33 @@ run_odoo_ephemeral() {
   local db="$1" log="$2"
   shift 2
   make_odoo_conf
-  docker run --rm --user 0:0 \
-    --mount "type=bind,src=$ODOO_CONF,dst=/run/blueops-odoo.conf,readonly" \
+  local mount_src="$ODOO_CONF"
+  if [[ -n "$RUNTIME_SSH" ]]; then
+    REMOTE_ODOO_CONF="/tmp/blueops-odoo-${BLUEOPS_ENV}-$$.conf"
+    ssh -o BatchMode=yes "$RUNTIME_SSH" "umask 077; cat > '$REMOTE_ODOO_CONF'" <"$ODOO_CONF"
+    mount_src="$REMOTE_ODOO_CONF"
+  fi
+  runtime_docker run --rm --user 0:0 \
+    --mount "type=bind,src=$mount_src,dst=/run/blueops-odoo.conf,readonly" \
     --entrypoint odoo "$IMAGE" \
     -c /run/blueops-odoo.conf -d "$db" "$@" \
     --stop-after-init --no-http --log-level=warn >"$log" 2>&1
   local rc=$?
+  if [[ -n "${REMOTE_ODOO_CONF:-}" ]]; then
+    ssh -o BatchMode=yes "$RUNTIME_SSH" "rm -f '$REMOTE_ODOO_CONF'" || true
+    REMOTE_ODOO_CONF=""
+  fi
   rm -f "$ODOO_CONF"
   ODOO_CONF=""
   return "$rc"
 }
 
 ensure_image() {
-  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  if runtime_docker image inspect "$IMAGE" >/dev/null 2>&1; then
     ok "imagem já disponível localmente"
     return 0
   fi
-  if docker pull "$IMAGE" >/dev/null 2>&1; then
+  if runtime_docker pull "$IMAGE" >/dev/null 2>&1; then
     ok "imagem baixada do registry"
     return 0
   fi
@@ -145,13 +180,13 @@ check_current() {
   ok "Swarm $SERVICE $replicas"
 
   db_ctx
-  health="$(docker inspect "$CID" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
+  health="$(runtime_docker inspect "$CID" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
   [[ "$health" == "healthy" || "$health" == "running" ]] || fail "container=$health"
   ok "container $health"
 
   local stable=0 sample
   for sample in 1 2 3; do
-    recovery="$(docker exec -i "$CID" python3 - "$DB" <<'PY'
+    recovery="$(runtime_docker exec -i "$CID" python3 - "$DB" <<'PY'
 import os,pathlib,psycopg2,sys
 db=sys.argv[1]
 pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
@@ -175,7 +210,7 @@ PY
   [[ "$stable" == "3" ]] || fail "PostgreSQL sem estabilidade (último estado=$recovery)"
   ok "PostgreSQL estável: 3/3 amostras fora de recovery"
 
-  transient="$(docker exec -i "$CID" python3 - "$DB" <<'PY'
+  transient="$(runtime_docker exec -i "$CID" python3 - "$DB" <<'PY'
 import os,pathlib,psycopg2,sys
 db=sys.argv[1]
 pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
@@ -208,7 +243,7 @@ snapshot() {
   local attempt log
   for attempt in 1 2 3; do
     log="$(mktemp)"
-    if docker exec "$CID" sh -lc 'PW=$(cat "$PASSWORD_FILE"); export PGPASSWORD="$PW"; exec pg_dump -h "$HOST" -p "${PORT:-5432}" -U "$USER" -d '"$DB"' -Fc --no-owner --no-acl' >"$SNAPSHOT" 2>"$log"; then
+    if runtime_docker exec "$CID" sh -lc 'PW=$(cat "$PASSWORD_FILE"); export PGPASSWORD="$PW"; exec pg_dump -h "$HOST" -p "${PORT:-5432}" -U "$USER" -d '"$DB"' -Fc --no-owner --no-acl' >"$SNAPSHOT" 2>"$log"; then
       break
     fi
     cat "$log" >&2
@@ -221,7 +256,7 @@ snapshot() {
     fail "pg_dump falhou"
   done
   test -s "$SNAPSHOT" || fail "snapshot vazio"
-  docker exec -i "$CID" pg_restore -l <"$SNAPSHOT" >/dev/null || fail "snapshot inválido"
+  runtime_docker exec -i "$CID" pg_restore -l <"$SNAPSHOT" >/dev/null || fail "snapshot inválido"
   sha256sum "$SNAPSHOT" >"$SNAPSHOT.sha256"
   docker service inspect "$SERVICE" >"$SPEC"
   ok "snapshot válido: $SNAPSHOT"
@@ -229,7 +264,7 @@ snapshot() {
 
 cleanup_clone() {
   [[ -n "${CLONE:-}" && -n "${CID:-}" ]] || return 0
-  docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" python3 - <<'PY' >/dev/null 2>&1 || true
+  runtime_docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" python3 - <<'PY' >/dev/null 2>&1 || true
 import os,pathlib,psycopg2
 from psycopg2 import sql
 pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
@@ -241,10 +276,24 @@ c.close()
 PY
 }
 
+prepare_clone_extensions() {
+  [[ -n "$PRECREATE_EXTENSIONS" ]] || return 0
+  [[ -n "$DB_ADMIN_SERVICE" && -n "$DB_ADMIN_USER" ]] || fail "PRECREATE_EXTENSIONS exige DB_ADMIN_SERVICE e DB_ADMIN_USER"
+  local admin_cid ext
+  admin_cid="$(docker ps --filter "label=com.docker.swarm.service.name=$DB_ADMIN_SERVICE" -q | head -1)"
+  [[ -n "$admin_cid" ]] || fail "container admin PostgreSQL não encontrado: $DB_ADMIN_SERVICE"
+  IFS=',' read -ra exts <<<"$PRECREATE_EXTENSIONS"
+  for ext in "${exts[@]}"; do
+    [[ "$ext" =~ ^[A-Za-z0-9_]+$ ]] || fail "nome de extensão inválido: $ext"
+    docker exec "$admin_cid" psql -U "$DB_ADMIN_USER" -d "$CLONE" -v ON_ERROR_STOP=1 -q -c "CREATE EXTENSION IF NOT EXISTS \"$ext\""
+    ok "extensão preparada no clone: $ext"
+  done
+}
+
 gate_clone() {
   CLONE="gate_${DB}_$(date +%Y%m%d%H%M%S)"
   say "== CLONE GATE: $CLONE =="
-  docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" python3 - <<'PY'
+  runtime_docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" python3 - <<'PY'
 import os,pathlib,psycopg2
 from psycopg2 import sql
 pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
@@ -255,9 +304,13 @@ q.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(os.enviro
 c.close()
 PY
   trap cleanup_clone EXIT
-  docker exec -i "$CID" pg_restore --no-owner --no-acl -f - <"$SNAPSHOT" \
-    | sed '/transaction_timeout/d' \
-    | docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" sh -lc 'PW=$(cat "$PASSWORD_FILE"); export PGPASSWORD="$PW"; exec psql -h "$HOST" -p "${PORT:-5432}" -U "$USER" -d "$BLUEOPS_CLONE" -v ON_ERROR_STOP=1 -q'
+  prepare_clone_extensions
+  RESTORE_SQL="$(mktemp)"
+  FILTERED_SQL="$(mktemp)"
+  runtime_docker exec -i "$CID" pg_restore --no-owner --no-acl -f - <"$SNAPSHOT" >"$RESTORE_SQL"
+  sed '/transaction_timeout/d;/^CREATE EXTENSION /d;/^COMMENT ON EXTENSION /d' "$RESTORE_SQL" >"$FILTERED_SQL"
+  runtime_docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" sh -lc 'PW=$(cat "$PASSWORD_FILE"); export PGPASSWORD="$PW"; exec psql -h "$HOST" -p "${PORT:-5432}" -U "$USER" -d "$BLUEOPS_CLONE" -v ON_ERROR_STOP=1 -q' <"$FILTERED_SQL"
+  rm -f "$RESTORE_SQL" "$FILTERED_SQL"
 
   GATE_LOG="$(mktemp)"
   args=()
@@ -267,7 +320,7 @@ PY
   grep -Eq 'CRITICAL|Traceback|Failed to initialize|incompatible version|not installable|ParseError' "$GATE_LOG" && { tail -120 "$GATE_LOG" >&2; fail "gate Odoo encontrou erro crítico"; }
 
   total_expected="$(awk -F',' '{print NF}' <<<"$EXPECTED_MODULES")"
-  installed="$(docker exec -i -e BLUEOPS_CLONE="$CLONE" -e BLUEOPS_EXPECTED="$EXPECTED_MODULES" "$CID" python3 - <<'PY'
+  installed="$(runtime_docker exec -i -e BLUEOPS_CLONE="$CLONE" -e BLUEOPS_EXPECTED="$EXPECTED_MODULES" "$CID" python3 - <<'PY'
 import os,pathlib,psycopg2
 pw=pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
 names=[x for x in os.environ["BLUEOPS_EXPECTED"].split(",") if x]
