@@ -54,8 +54,10 @@ RUNTIME_SSH="${RUNTIME_SSH:-}"
 PRECREATE_EXTENSIONS="${PRECREATE_EXTENSIONS:-}"
 DB_ADMIN_SERVICE="${DB_ADMIN_SERVICE:-}"
 DB_ADMIN_USER="${DB_ADMIN_USER:-}"
+DEPLOY_ENABLED="${DEPLOY_ENABLED:-1}"
 
 if [[ "$CMD" != "check" ]]; then
+  [[ "$DEPLOY_ENABLED" == "1" ]] || { echo "Gate/deploy desabilitado para $BLUEOPS_ENV pelo catálogo." >&2; exit 12; }
   [[ -n "$IMAGE" ]] || { echo "Falta --image" >&2; exit 2; }
   [[ "$IMAGE" == "$IMAGE_PREFIX"* ]] || { echo "Imagem fora do prefixo permitido: $IMAGE_PREFIX" >&2; exit 2; }
 fi
