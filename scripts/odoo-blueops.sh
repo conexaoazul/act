@@ -69,7 +69,23 @@ say(){ printf '%s\n' "$*"; }
 ok(){ say "OK: $*"; }
 fail(){ say "FAIL: $*" >&2; exit 1; }
 
+service_runtime_node() {
+  docker service ps "$SERVICE" --filter desired-state=running --format '{{.Node}}' | head -1
+}
+
+assert_local_runtime() {
+  local runtime_node local_node
+  runtime_node="$(service_runtime_node)"
+  local_node="$(hostname)"
+  [[ -n "$runtime_node" ]] || fail "não foi possível determinar o nó runtime do service"
+  if [[ "$runtime_node" != "$local_node" ]]; then
+    fail "service $SERVICE roda em $runtime_node; execute o BlueOps nesse nó (nó atual: $local_node)"
+  fi
+  ok "runtime local no nó $local_node"
+}
+
 cid() {
+  assert_local_runtime >/dev/null
   docker ps --filter "label=com.docker.swarm.service.name=$SERVICE" -q | head -1
 }
 
