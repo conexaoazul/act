@@ -303,9 +303,12 @@ c.close()
 PY
   trap cleanup_clone EXIT
   prepare_clone_extensions
-  runtime_docker exec -i "$CID" pg_restore --no-owner --no-acl -f - <"$SNAPSHOT" \
-    | sed '/transaction_timeout/d;/^CREATE EXTENSION /d;/^COMMENT ON EXTENSION /d' \
-    | runtime_docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" sh -lc 'PW=$(cat "$PASSWORD_FILE"); export PGPASSWORD="$PW"; exec psql -h "$HOST" -p "${PORT:-5432}" -U "$USER" -d "$BLUEOPS_CLONE" -v ON_ERROR_STOP=1 -q'
+  RESTORE_SQL="$(mktemp)"
+  FILTERED_SQL="$(mktemp)"
+  runtime_docker exec -i "$CID" pg_restore --no-owner --no-acl -f - <"$SNAPSHOT" >"$RESTORE_SQL"
+  sed '/transaction_timeout/d;/^CREATE EXTENSION /d;/^COMMENT ON EXTENSION /d' "$RESTORE_SQL" >"$FILTERED_SQL"
+  runtime_docker exec -i -e BLUEOPS_CLONE="$CLONE" "$CID" sh -lc 'PW=$(cat "$PASSWORD_FILE"); export PGPASSWORD="$PW"; exec psql -h "$HOST" -p "${PORT:-5432}" -U "$USER" -d "$BLUEOPS_CLONE" -v ON_ERROR_STOP=1 -q' <"$FILTERED_SQL"
+  rm -f "$RESTORE_SQL" "$FILTERED_SQL"
 
   GATE_LOG="$(mktemp)"
   args=()
