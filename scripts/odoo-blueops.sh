@@ -110,10 +110,10 @@ cid() {
 db_ctx() {
   CID="$(cid)"
   [[ -n "$CID" ]] || fail "container runtime do service não encontrado"
-  DBHOST="$(runtime_runtime_docker exec "$CID" sh -lc 'printf %s "$HOST"')"
-  DBPORT="$(runtime_runtime_docker exec "$CID" sh -lc 'printf %s "${PORT:-5432}"')"
-  DBUSER="$(runtime_runtime_docker exec "$CID" sh -lc 'printf %s "$USER"')"
-  DBPASS="$(runtime_runtime_docker exec "$CID" sh -lc 'cat "$PASSWORD_FILE"')"
+  DBHOST="$(runtime_docker exec "$CID" sh -lc 'printf %s "$HOST"')"
+  DBPORT="$(runtime_docker exec "$CID" sh -lc 'printf %s "${PORT:-5432}"')"
+  DBUSER="$(runtime_docker exec "$CID" sh -lc 'printf %s "$USER"')"
+  DBPASS="$(runtime_docker exec "$CID" sh -lc 'cat "$PASSWORD_FILE"')"
 }
 
 make_odoo_conf() {
