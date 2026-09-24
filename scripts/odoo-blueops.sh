@@ -74,10 +74,14 @@ service_runtime_node() {
 }
 
 assert_local_runtime() {
-  local runtime_node local_node
+  local runtime_node local_node expected_node
   runtime_node="$(service_runtime_node)"
   local_node="$(hostname)"
+  expected_node="${RUNTIME_NODE:-}"
   [[ -n "$runtime_node" ]] || fail "não foi possível determinar o nó runtime do service"
+  if [[ -n "$expected_node" && "$runtime_node" != "$expected_node" ]]; then
+    fail "service $SERVICE roda em $runtime_node, mas catálogo espera $expected_node"
+  fi
   if [[ "$runtime_node" != "$local_node" ]]; then
     fail "service $SERVICE roda em $runtime_node; execute o BlueOps nesse nó (nó atual: $local_node)"
   fi
