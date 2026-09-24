@@ -10,6 +10,7 @@ Uso:
   blueops env list
   blueops env show <ambiente>
   blueops env validate <ambiente>
+  blueops env discover
   blueops odoo <ambiente> check
   blueops odoo <ambiente> gate --image <imagem>
   blueops odoo <ambiente> deploy --image <imagem>
@@ -62,6 +63,28 @@ list_envs() {
   done
 }
 
+discover_envs() {
+  command -v docker >/dev/null || { echo "docker não encontrado" >&2; return 2; }
+  declare -A known=()
+  shopt -s nullglob
+  local f svc name replicas image
+  for f in "$CONFIG_ROOT"/*.env; do
+    [[ "$(basename "$f")" == "example.env" ]] && continue
+    # shellcheck disable=SC1090
+    source "$f"
+    known["$SERVICE"]=1
+  done
+
+  printf '%-34s %-8s %s\n' "SERVICE" "REPLICAS" "IMAGE"
+  while IFS='|' read -r svc replicas image; do
+    [[ -n "$svc" ]] || continue
+    [[ -n "${known[$svc]:-}" ]] && continue
+    if [[ "$svc" =~ odoo|gremio|digimano|phd|saas|portal ]] || [[ "$image" =~ odoo ]]; then
+      printf '%-34s %-8s %s\n' "$svc" "$replicas" "$image"
+    fi
+  done < <(docker service ls --format '{{.Name}}|{{.Replicas}}|{{.Image}}' | sort)
+}
+
 show_env() {
   local env="$1" cfg
   cfg="$(cfg_path "$env")"
@@ -85,6 +108,7 @@ case "$1" in
       list) list_envs ;;
       show) [[ $# -eq 2 ]] || { usage; exit 2; }; show_env "$2" ;;
       validate) [[ $# -eq 2 ]] || { usage; exit 2; }; validate_cfg "$2"; echo "ENV_OK $2" ;;
+      discover) discover_envs ;;
       *) usage; exit 2 ;;
     esac
     ;;
