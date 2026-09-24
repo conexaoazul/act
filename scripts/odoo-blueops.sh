@@ -56,7 +56,9 @@ if [[ "$CMD" != "check" ]]; then
   [[ "$IMAGE" == "$IMAGE_PREFIX"* ]] || { echo "Imagem fora do prefixo permitido: $IMAGE_PREFIX" >&2; exit 2; }
 fi
 
-LOCK="/tmp/blueops-odoo-${BLUEOPS_ENV}.lock"
+LOCK_ROOT="${LOCK_ROOT:-/var/lib/blueops/locks}"
+mkdir -p "$LOCK_ROOT"
+LOCK="$LOCK_ROOT/blueops-odoo-${BLUEOPS_ENV}.lock"
 exec 9>"$LOCK"
 if ! flock -n 9; then
   echo "Outro deploy/check exclusivo de ${BLUEOPS_ENV} já está em execução." >&2
