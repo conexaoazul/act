@@ -76,7 +76,9 @@ service_runtime_node() {
 
 runtime_docker() {
   if [[ -n "$RUNTIME_SSH" ]]; then
-    ssh -o BatchMode=yes "$RUNTIME_SSH" docker "$@"
+    local cmd
+    printf -v cmd '%q ' docker "$@"
+    ssh -o BatchMode=yes "$RUNTIME_SSH" "$cmd"
   else
     docker "$@"
   fi
