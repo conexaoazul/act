@@ -53,6 +53,7 @@ list_envs() {
   local f env
   for f in "$CONFIG_ROOT"/*.env; do
     env="$(basename "$f" .env)"
+    [[ "$env" == "example" ]] && continue
     # shellcheck disable=SC1090
     (
       source "$f"
